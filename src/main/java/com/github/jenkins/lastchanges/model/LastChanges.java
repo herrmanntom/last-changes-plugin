@@ -31,6 +31,7 @@ public class LastChanges implements Serializable {
     private final String diff;
     private final byte[] compressedDiff;
     private final List<CommitChanges> commits;//commits between current and previous revisions along with their changes related to its previous commit
+    private String message;
 
     public LastChanges(CommitInfo current, CommitInfo previous, String diff) {
         this.currentRevision = current;
@@ -84,6 +85,14 @@ public class LastChanges implements Serializable {
         if (commitchange != null) {
             commits.add(commitchange);
         }
+    }
+
+    public void addMessage(String message) {
+        this.message = message;
+    }
+
+    public String getMessage() {
+        return message;
     }
 
     @Whitelisted

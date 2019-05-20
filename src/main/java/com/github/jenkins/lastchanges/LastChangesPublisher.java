@@ -31,6 +31,7 @@ import hudson.Extension;
 import hudson.FilePath;
 import hudson.Launcher;
 import hudson.model.*;
+import hudson.remoting.Callable;
 import hudson.remoting.VirtualChannel;
 import hudson.scm.SCM;
 import hudson.scm.SubversionSCM;
@@ -56,6 +57,7 @@ import org.tmatesoft.svn.core.wc.SVNRevision;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.DateFormat;
@@ -233,20 +235,30 @@ public class LastChangesPublisher extends Recorder implements SimpleBuildStep, S
 
         try {
             if (isGit) {
-                if (hasTargetRevision) {
-                    //compares current repository revision with provided revision
-                    lastChanges = GitLastChanges.getInstance().changesOf(gitRepository, GitLastChanges.getInstance().resolveCurrentRevision(gitRepository), gitRepository.resolve(targetRevision));
-                    List<CommitInfo> commitInfoList = getCommitsBetweenRevisions(lastChanges.getCurrentRevision().getCommitId(), targetRevision, null);
-                    lastChanges.addCommits(commitChanges(commitInfoList, lastChanges.getPreviousRevision().getCommitId(), null));
-                } else {
+//                if (hasTargetRevision) {
+//                    //compares current repository revision with provided revision
+//                    lastChanges = GitLastChanges.getInstance().changesOf(gitRepository, GitLastChanges.getInstance().resolveCurrentRevision(gitRepository), gitRepository.resolve(targetRevision));
+//                    List<CommitInfo> commitInfoList = getCommitsBetweenRevisions(lastChanges.getCurrentRevision().getCommitId(), targetRevision, null);
+//                    lastChanges.addCommits(commitChanges(commitInfoList, lastChanges.getPreviousRevision().getCommitId(), null));
+//                } else {
                     //compares current repository revision with previous one
                     if(isSlave()) {
-                       lastChanges = new LastChangesCallable().invoke(new File(vcsDirFound.getRemote()), Computer.currentComputer().getChannel());
+                        LastChangesCallable task = new LastChangesCallable(new File(vcsDirFound.getRemote()));
+                        if (launcher.getChannel() != null) {
+                            lastChanges = launcher.getChannel().call(task);
+                            listener.error("msg from slave: " + lastChanges.getMessage());
+                            LOG.log(Level.SEVERE, "msg from slave: " + lastChanges.getMessage());
+                        } else {
+                            listener.error("Last Changes NOT published due to the following error: launcher.getChannel() == null");
+                            LOG.log(Level.SEVERE, "Could not publish LastChanges: launcher.getChannel() == null");
+                        }
                     } else {
+                        LOG.log(Level.SEVERE, "Is not slave");
+                        listener.error("Is not slave");
                         lastChanges = GitLastChanges.getInstance().changesOf(gitRepository);
                         lastChanges.addCommit(new CommitChanges(lastChanges.getCurrentRevision(), lastChanges.getDiff()));
                     }
-                }
+//                }
 
             } else if (isSvn) {
                 SvnLastChanges svnLastChanges = getSvnLastChanges(svnAuthProvider);
@@ -633,21 +645,29 @@ public class LastChangesPublisher extends Recorder implements SimpleBuildStep, S
         this.specificBuild = buildNumber;
     }
 
-    private static class LastChangesCallable implements FilePath.FileCallable<LastChanges> {
+    private static class LastChangesCallable implements Callable<LastChanges, Exception> {
+        private File f;
+
+        public LastChangesCallable(File f) {
+            this.f = f;
+        }
 
         @Override
-        public LastChanges invoke(File f, VirtualChannel channel) throws IOException, InterruptedException {
-            LOG.info("Invoking last changes remotely...");
+        public LastChanges call() throws Exception {
+            LOG.info("Invoking last changes remotely on " + InetAddress.getLocalHost().getHostName() + "...");
             LOG.info("File absolute: "+f.getAbsolutePath());
+            StringBuilder message = new StringBuilder("Invoked last changes remotely on " + InetAddress.getLocalHost().getHostName() + " and found ");
             try (Stream<Path> paths = Files.walk(Paths.get(f.getAbsolutePath()))) {
                 paths.forEach(path -> {
                     LOG.info(path.toString());
                     LOG.info("ABS:"+path.toAbsolutePath().toString());
+                    message.append(path.toAbsolutePath().toString()).append(" ");
                 });
             }
             Repository gitRepository = repository(f.getAbsolutePath());
             LastChanges lastChanges = GitLastChanges.getInstance().changesOf(gitRepository);
             lastChanges.addCommit(new CommitChanges(lastChanges.getCurrentRevision(), lastChanges.getDiff()));
+            lastChanges.addMessage(message.toString());
             return lastChanges;
         }
 
